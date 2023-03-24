@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "libzmx",
+    "winzmx",
+    "zmx",
+    "zmx_macros",
+]
