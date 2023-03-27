@@ -3,6 +3,8 @@
 
 use std::io::{Read, Write};
 
+use zmx_macros::minimum_length;
+
 use crate::io_ext::{ReadExt, WriteExt};
 
 
@@ -10,6 +12,7 @@ use crate::io_ext::{ReadExt, WriteExt};
 ///
 /// This is the only record required by the ZIP file format.
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[minimum_length(biased)]
 pub(crate) struct EndOfCentralDirectory {
     /// Number of this disk.
     pub disk_no: u16,
@@ -41,8 +44,12 @@ impl EndOfCentralDirectory {
     /// It is equivalent to `b"PK\x05\x06"`, interpreted as `u32` in little-endian byte order.
     pub const fn signature() -> u32 { 0x06054B50 }
 
+    const fn min_len_bias() -> u64 {
+        4 // signature
+    }
+
     /// Write the end-of-central-directory record.
-    pub fn write<W: Write>(&self, writer: W) -> Result<(), crate::Error> {
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
         // write signature
         writer.write_u32_le(Self::signature())?;
 
@@ -69,7 +76,7 @@ impl EndOfCentralDirectory {
     }
 
     /// Read an end-of-central-directory record.
-    pub fn read<R: Read>(&self, reader: R) -> Result<Self, crate::Error> {
+    pub fn read<R: Read>(&self, mut reader: R) -> Result<Self, crate::Error> {
         let signature_bytes = reader.read_u32_le()?;
         if signature_bytes != Self::signature() {
             return Err(crate::Error::IncorrectSignature);
@@ -112,6 +119,7 @@ impl EndOfCentralDirectory {
 /// generally assumed to directly precede it. The Zip64 End of Central Directory record itself may
 /// be on a different disk.
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[minimum_length(biased)]
 pub(crate) struct Zip64EndOfCentralDirectoryLocator {
     /// Number of the disk with the Zip64 End of Central Directory record.
     pub disk_no: u32,
@@ -128,8 +136,12 @@ impl Zip64EndOfCentralDirectoryLocator {
     /// It is equivalent to `b"PK\x06\x07"`, interpreted as `u32` in little-endian byte order.
     pub const fn signature() -> u32 { 0x07064B50 }
 
+    const fn min_len_bias() -> u64 {
+        4 // signature
+    }
+
     /// Write the Zip64 end-of-central-directory locator record.
-    pub fn write<W: Write>(&self, writer: W) -> Result<(), crate::Error> {
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
         // write signature
         writer.write_u32_le(Self::signature())?;
 
@@ -142,7 +154,7 @@ impl Zip64EndOfCentralDirectoryLocator {
     }
 
     /// Read a Zip64 end-of-central-directory locator record.
-    pub fn read<R: Read>(&self, reader: R) -> Result<Self, crate::Error> {
+    pub fn read<R: Read>(&self, mut reader: R) -> Result<Self, crate::Error> {
         let signature_bytes = reader.read_u32_le()?;
         if signature_bytes != Self::signature() {
             return Err(crate::Error::IncorrectSignature);
@@ -165,6 +177,7 @@ impl Zip64EndOfCentralDirectoryLocator {
 ///
 /// This is used to augment the [End of Central Directory record](EndOfCentralDirectory) with fields
 /// with a larger value range, allowing larger files.
+#[minimum_length(biased)]
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Zip64EndOfCentralDirectory {
     /// ZIP version supported by the software that created the file.
@@ -200,16 +213,9 @@ impl Zip64EndOfCentralDirectory {
     /// It is equivalent to `b"PK\x06\x06"`, interpreted as `u32` in little-endian byte order.
     pub const fn signature() -> u32 { 0x06064B50 }
 
-    /// The minimum size of this structure.
-    pub const fn min_len() -> u64 {
+    const fn min_len_bias() -> u64 {
         4 // signature
         + 8 // length
-        + Self::fixed_fields_len()
-    }
-
-    /// The length of the fixed fields of this directory, excluding the signature and length.
-    pub const fn fixed_fields_len() -> u64 {
-        
     }
 
     /// Write the Zip64 end-of-central-directory record.
@@ -244,7 +250,8 @@ impl Zip64EndOfCentralDirectory {
         }
 
         let size = reader.read_u64_le()?;
-        if size < Self::fixed_fields_len() {
+        const FIXED_FIELDS_LEN: u64 = Zip64EndOfCentralDirectory::min_len() - Zip64EndOfCentralDirectory::min_len_bias();
+        if size < FIXED_FIELDS_LEN {
             return Err(crate::Error::RecordTooSmall);
         }
         let extensible_length: usize = (size - Self::min_len()).try_into().unwrap();
@@ -272,5 +279,114 @@ impl Zip64EndOfCentralDirectory {
             central_dir_offset_on_disk,
             extensible_data_sector,
         })
+    }
+}
+
+
+/// The "Central Directory Header" record.
+///
+/// This contains information about a single directory entry.
+#[minimum_length(biased)]
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct CentralDirectoryHeader {
+    /// ZIP version supported by the software that created this entry.
+    pub creator_version: u16,
+
+    /// ZIP version required to extract this entry.
+    pub required_version: u16,
+
+    /// General-purpose field of bit flags.
+    pub general_purpose_bit_flag: u16,
+
+    /// Method with which the file was compressed.
+    pub compression_method: u32,
+
+    /// The file's time of last modification.
+    pub last_mod_file_time: u16,
+
+    /// The file's date of last modification.
+    pub last_mod_file_date: u16,
+
+    /// CRC-32 checksum of the data.
+    pub crc32: u32,
+
+    /// The compressed size of this file.
+    pub compressed_size: u32,
+
+    /// The uncompressed size of this file.
+    pub uncompressed_size: u32,
+
+    /// The file name of this entry.
+    pub file_name: Vec<u8>,
+
+    /// Data in the extra field of this entry.
+    pub extra_field: Vec<u8>,
+
+    // todo:
+    // * file comment (length; data at end)
+    // * disk number start
+    // * internal file attributes
+    // * external file attributes
+    // * relative offset of local header
+}
+impl CentralDirectoryHeader {
+    /// The constant signature of a Central Directory Header record.
+    ///
+    /// It is equivalent to `b"PK\x01\x02"`, interpreted as `u32` in little-endian byte order.
+    pub const fn signature() -> u32 { 0x02014B50 }
+
+    const fn min_len_bias() -> u64 {
+        4 // signature
+    }
+
+    /// Write the central directory header record.
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
+        // write signature
+        writer.write_u32_le(Self::signature())?;
+
+        let file_name_length: u16 = if self.file_name.len() > 0xFFFF {
+            0xFFFF
+        } else {
+            self.file_name.len().try_into().unwrap()
+        };
+        let extra_field_length: u16 = if self.extra_field.len() > 0xFFFF {
+            0xFFFF
+        } else {
+            self.extra_field.len().try_into().unwrap()
+        };
+
+        // write out fields in turn
+        writer.write_u16_le(self.creator_version)?;
+        writer.write_u16_le(self.required_version)?;
+        writer.write_u16_le(self.general_purpose_bit_flag)?;
+        writer.write_u32_le(self.compression_method)?;
+        writer.write_u16_le(self.last_mod_file_time)?;
+        writer.write_u16_le(self.last_mod_file_date)?;
+        writer.write_u32_le(self.crc32)?;
+        writer.write_u32_le(self.compressed_size)?;
+        writer.write_u32_le(self.uncompressed_size)?;
+        writer.write_u16_le(file_name_length)?;
+        writer.write_u16_le(extra_field_length)?;
+
+        writer.write_all(&self.file_name)?;
+        writer.write_all(&self.extra_field)?;
+
+        Ok(())
+    }
+
+    /// Read a Zip64 end-of-central-directory locator record.
+    pub fn read<R: Read>(&self, mut reader: R) -> Result<Self, crate::Error> {
+        let signature_bytes = reader.read_u32_le()?;
+        if signature_bytes != Self::signature() {
+            return Err(crate::Error::IncorrectSignature);
+        }
+
+        let size = reader.read_u64_le()?;
+        const FIXED_FIELDS_LEN: u64 = Zip64EndOfCentralDirectory::min_len() - Zip64EndOfCentralDirectory::min_len_bias();
+        if size < FIXED_FIELDS_LEN {
+            return Err(crate::Error::RecordTooSmall);
+        }
+
+        todo!();
     }
 }

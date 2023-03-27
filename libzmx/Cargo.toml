@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-zip = { version = "0.6" }
+zmx_macros = { path = "../zmx_macros" }
