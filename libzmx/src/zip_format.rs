@@ -76,7 +76,7 @@ impl EndOfCentralDirectory {
     }
 
     /// Read an end-of-central-directory record.
-    pub fn read<R: Read>(&self, mut reader: R) -> Result<Self, crate::Error> {
+    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let signature_bytes = reader.read_u32_le()?;
         if signature_bytes != Self::signature() {
             return Err(crate::Error::IncorrectSignature);
@@ -154,7 +154,7 @@ impl Zip64EndOfCentralDirectoryLocator {
     }
 
     /// Read a Zip64 end-of-central-directory locator record.
-    pub fn read<R: Read>(&self, mut reader: R) -> Result<Self, crate::Error> {
+    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let signature_bytes = reader.read_u32_le()?;
         if signature_bytes != Self::signature() {
             return Err(crate::Error::IncorrectSignature);
@@ -243,7 +243,7 @@ impl Zip64EndOfCentralDirectory {
     }
 
     /// Read a Zip64 end-of-central-directory locator record.
-    pub fn read<R: Read>(&self, mut reader: R) -> Result<Self, crate::Error> {
+    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let signature_bytes = reader.read_u32_le()?;
         if signature_bytes != Self::signature() {
             return Err(crate::Error::IncorrectSignature);
@@ -320,14 +320,22 @@ pub(crate) struct CentralDirectoryHeader {
     pub file_name: Vec<u8>,
 
     /// Data in the extra field of this entry.
-    pub extra_field: Vec<u8>,
+    pub extra_fields: Vec<u8>,
 
-    // todo:
-    // * file comment (length; data at end)
-    // * disk number start
-    // * internal file attributes
-    // * external file attributes
-    // * relative offset of local header
+    /// The comment accompanying the file.
+    pub file_comment: Vec<u8>,
+
+    /// The number of the disk containing the first chunk of this file.
+    pub disk_number_start: u16,
+
+    /// The ZIP-internal attributes of this file.
+    pub internal_attributes: u16,
+
+    /// External attributes of this file.
+    pub external_attributes: u32,
+
+    /// Relative offset to the local file header.
+    pub local_header_relative_offset: i32,
 }
 impl CentralDirectoryHeader {
     /// The constant signature of a Central Directory Header record.
@@ -349,10 +357,15 @@ impl CentralDirectoryHeader {
         } else {
             self.file_name.len().try_into().unwrap()
         };
-        let extra_field_length: u16 = if self.extra_field.len() > 0xFFFF {
+        let extra_field_length: u16 = if self.extra_fields.len() > 0xFFFF {
             0xFFFF
         } else {
-            self.extra_field.len().try_into().unwrap()
+            self.extra_fields.len().try_into().unwrap()
+        };
+        let file_comment_length: u16 = if self.file_comment.len() > 0xFFFF {
+            0xFFFF
+        } else {
+            self.file_comment.len().try_into().unwrap()
         };
 
         // write out fields in turn
@@ -367,26 +380,134 @@ impl CentralDirectoryHeader {
         writer.write_u32_le(self.uncompressed_size)?;
         writer.write_u16_le(file_name_length)?;
         writer.write_u16_le(extra_field_length)?;
+        writer.write_u16_le(file_comment_length)?;
+        writer.write_u16_le(self.disk_number_start)?;
+        writer.write_u16_le(self.internal_attributes)?;
+        writer.write_u32_le(self.external_attributes)?;
+        writer.write_i32_le(self.local_header_relative_offset)?;
 
         writer.write_all(&self.file_name)?;
-        writer.write_all(&self.extra_field)?;
+        writer.write_all(&self.extra_fields)?;
+        writer.write_all(&self.file_comment)?;
 
         Ok(())
     }
 
-    /// Read a Zip64 end-of-central-directory locator record.
-    pub fn read<R: Read>(&self, mut reader: R) -> Result<Self, crate::Error> {
+    /// Read a central directory header record.
+    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let signature_bytes = reader.read_u32_le()?;
         if signature_bytes != Self::signature() {
             return Err(crate::Error::IncorrectSignature);
         }
 
-        let size = reader.read_u64_le()?;
-        const FIXED_FIELDS_LEN: u64 = Zip64EndOfCentralDirectory::min_len() - Zip64EndOfCentralDirectory::min_len_bias();
-        if size < FIXED_FIELDS_LEN {
-            return Err(crate::Error::RecordTooSmall);
+        let creator_version = reader.read_u16_le()?;
+        let required_version = reader.read_u16_le()?;
+        let general_purpose_bit_flag = reader.read_u16_le()?;
+        let compression_method = reader.read_u32_le()?;
+        let last_mod_file_time = reader.read_u16_le()?;
+        let last_mod_file_date = reader.read_u16_le()?;
+        let crc32 = reader.read_u32_le()?;
+        let compressed_size = reader.read_u32_le()?;
+        let uncompressed_size = reader.read_u32_le()?;
+        let file_name_length = reader.read_u16_le()?;
+        let extra_field_length = reader.read_u16_le()?;
+        let file_comment_length = reader.read_u16_le()?;
+        let disk_number_start = reader.read_u16_le()?;
+        let internal_attributes = reader.read_u16_le()?;
+        let external_attributes = reader.read_u32_le()?;
+        let local_header_relative_offset = reader.read_i32_le()?;
+
+        let mut file_name = vec![0u8; file_name_length.into()];
+        reader.read_exact(&mut file_name)?;
+
+        let mut extra_fields = vec![0u8; extra_field_length.into()];
+        reader.read_exact(&mut extra_fields)?;
+
+        let mut file_comment = vec![0u8; file_comment_length.into()];
+        reader.read_exact(&mut file_comment)?;
+
+        Ok(Self {
+            creator_version,
+            required_version,
+            general_purpose_bit_flag,
+            compression_method,
+            last_mod_file_time,
+            last_mod_file_date,
+            crc32,
+            compressed_size,
+            uncompressed_size,
+            file_name,
+            extra_fields,
+            file_comment,
+            disk_number_start,
+            internal_attributes,
+            external_attributes,
+            local_header_relative_offset,
+        })
+    }
+}
+
+
+/// The "Zip64 Extended Information Extra Field" record.
+///
+/// This is one of the possible fields in a central directory entry's
+/// [`extra_fields`](CentralDirectoryHeader::extra_fields).
+#[minimum_length]
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct Zip64ExtraField {
+    /// The uncompressed size of this file.
+    pub uncompressed_size: u64,
+
+    /// The compressed size of this file.
+    pub compressed_size: u64,
+
+    /// Relative offset to the local file header.
+    pub local_header_relative_offset: i64,
+
+    /// The number of the disk containing the first chunk of this file.
+    pub disk_number_start: u32,
+}
+impl Zip64ExtraField {
+    /// The tag for this extra field.
+    pub const fn tag() -> u16 { 0x0001 }
+
+    /// Write the extra field, including tag and length.
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
+        // write tag
+        writer.write_u16_le(Self::tag())?;
+
+        // write size (except tag field and size field)
+        writer.write_u16_le(Self::min_len().try_into().unwrap())?;
+
+        // write fields
+        writer.write_u64_le(self.uncompressed_size)?;
+        writer.write_u64_le(self.compressed_size)?;
+        writer.write_i64_le(self.local_header_relative_offset)?;
+        writer.write_u32_le(self.disk_number_start)?;
+
+        Ok(())
+    }
+
+    /// Read the extra field, including its length.
+    ///
+    /// It is assumed that its tag has already been read (to ensure the read function of the correct
+    /// field is called).
+    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
+        let length = reader.read_u16_le()?;
+        if u64::from(length) != Self::min_len() {
+            return Err(crate::Error::UnexpectedExtraDataLength(length));
         }
 
-        todo!();
+        let uncompressed_size = reader.read_u64_le()?;
+        let compressed_size = reader.read_u64_le()?;
+        let local_header_relative_offset = reader.read_i64_le()?;
+        let disk_number_start = reader.read_u32_le()?;
+
+        Ok(Self {
+            uncompressed_size,
+            compressed_size,
+            local_header_relative_offset,
+            disk_number_start,
+        })
     }
 }

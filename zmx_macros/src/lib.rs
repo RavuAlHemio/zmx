@@ -38,15 +38,17 @@ pub fn minimum_length(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(item as ItemStruct);
 
     let mut biased = false;
-    let attr_parser = syn::meta::parser(|meta| {
-        if meta.path.is_ident("biased") {
-            biased = true;
-            Ok(())
-        } else {
-            Err(meta.error("unsupported minimum_length parameter"))
-        }
-    });
-    parse_macro_input!(attr with attr_parser);
+    if !attr.is_empty() {
+        let attr_parser = syn::meta::parser(|meta| {
+            if meta.path.is_ident("biased") {
+                biased = true;
+                Ok(())
+            } else {
+                Err(meta.error("unsupported minimum_length parameter"))
+            }
+        });
+        parse_macro_input!(attr with attr_parser);
+    }
 
     let no_fields = Punctuated::default();
     let struct_fields = match &ast.fields {

@@ -34,6 +34,11 @@ pub enum Error {
 
     /// A record is smaller than its minimum size.
     RecordTooSmall,
+
+    /// The extra data has an unexpected length.
+    ///
+    /// The contained value can be used to seek to the next extra data entry.
+    UnexpectedExtraDataLength(u16),
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -50,6 +55,8 @@ impl fmt::Display for Error {
                 => write!(f, "incorrect signature for structure"),
             Self::RecordTooSmall
                 => write!(f, "record too small"),
+            Self::UnexpectedExtraDataLength(_)
+                => write!(f, "unexpected length of extra data"),
         }
     }
 }
