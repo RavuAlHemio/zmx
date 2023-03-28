@@ -294,7 +294,7 @@ impl Zip64EndOfCentralDirectory {
 /// This contains information about a single directory entry.
 #[minimum_length(biased)]
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct CentralDirectoryHeader {
+pub struct CentralDirectoryHeader {
     /// ZIP version supported by the software that created this entry.
     pub creator_version: u16,
 

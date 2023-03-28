@@ -74,6 +74,21 @@ impl From<std::io::Error> for Error {
 }
 
 
+/// An entry encountered in a ZIP archive's central directory. Represents a single file system item
+/// (file, folder, etc.).
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ZipCentralDirectoryEntry {
+    /// The actual information about this entry.
+    pub entry: CentralDirectoryHeader,
+
+    /// The number of the disk containing this central directory entry.
+    pub disk: u32,
+
+    /// The offset of this file's central directory entry from the beginning of its disk.
+    pub offset: u64,
+}
+
+
 fn lookback_for_signature<F: Read + Seek>(mut file: F, signature: u32) -> Result<bool, Error> {
     loop {
         let possible_signature = file.read_u32_le()?;
@@ -87,7 +102,9 @@ fn lookback_for_signature<F: Read + Seek>(mut file: F, signature: u32) -> Result
     }
 }
 
-fn best_effort_decode(bytes: &[u8]) -> String {
+/// Attempts to decode the given byte slice as UTF-8; if this fails, stubbornly decodes it as
+/// ISO-8859-1 instead.
+pub fn best_effort_decode(bytes: &[u8]) -> String {
     match String::from_utf8(Vec::from(bytes)) {
         Ok(s) => s,
         Err(_) => {
@@ -100,7 +117,7 @@ fn best_effort_decode(bytes: &[u8]) -> String {
 
 
 /// Obtains the list of file names in the archive.
-pub fn zip_get_files<F: Read + Seek>(mut zip_file: F) -> Result<Vec<Vec<u8>>, Error> {
+pub fn zip_get_files<F: Read + Seek>(mut zip_file: F) -> Result<Vec<ZipCentralDirectoryEntry>, Error> {
     // start at the last possible location of the End of Central Directory record
     let eocd_start = -i64::try_from(EndOfCentralDirectory::min_len()).unwrap();
     zip_file.seek(SeekFrom::End(eocd_start))?;
@@ -162,9 +179,11 @@ pub fn zip_get_files<F: Read + Seek>(mut zip_file: F) -> Result<Vec<Vec<u8>>, Er
             break;
         }
         let cdh = CentralDirectoryHeader::read_after_signature(&mut zip_file)?;
-        let file_name = best_effort_decode(&cdh.file_name);
-        println!("{:?} ({})", file_name, cdh.uncompressed_size);
-        file_names.push(cdh.file_name.clone());
+        file_names.push(ZipCentralDirectoryEntry {
+            entry: cdh,
+            disk: 0,
+            offset: file_header_loc,
+        });
     }
 
     Ok(file_names)
