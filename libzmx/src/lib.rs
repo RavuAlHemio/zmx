@@ -9,7 +9,11 @@ mod zip_format;
 
 
 use std::fmt;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
+
+use io_ext::ReadExt;
+
+use crate::zip_format::EndOfCentralDirectory;
 
 
 /// An error that may occur during ZIP decoding or encoding.
@@ -67,7 +71,34 @@ impl From<std::io::Error> for Error {
 }
 
 
+fn lookback_for_signature<F: Read + Seek>(mut file: F, signature: u32) -> Result<bool, Error> {
+    loop {
+        let possible_signature = file.read_u32_le()?;
+        if possible_signature == signature {
+            return Ok(true);
+        }
+        let new_loc = file.seek(SeekFrom::Current(-5))?;
+        if new_loc == 0 {
+            return Ok(false);
+        }
+    }
+}
+
+
 /// Obtains the list of file names in the archive.
-pub fn zip_get_files<F: Read + Seek>(zip_file: F) -> Result<Vec<Vec<u8>>, Error> {
+pub fn zip_get_files<F: Read + Seek>(mut zip_file: F) -> Result<Vec<Vec<u8>>, Error> {
+    // start at the last possible location of the End of Central Directory record
+    let eocd_start = -i64::try_from(EndOfCentralDirectory::min_len()).unwrap();
+    zip_file.seek(SeekFrom::End(eocd_start))?;
+
+    // look for EoCD
+    let eocd_found = lookback_for_signature(&mut zip_file, EndOfCentralDirectory::signature())?;
+    if !eocd_found {
+        return Err(Error::MissingEndOfCentralDirectory);
+    }
+
+    // read EoCD
+    let eocd = EndOfCentralDirectory::read_after_signature(&mut zip_file)?;
+
     todo!();
 }

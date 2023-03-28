@@ -51,6 +51,9 @@ version = "0.1.0"
 [[package]]
 name = "zmx"
 version = "0.1.0"
+dependencies = [
+ "libzmx",
+]
 
 [[package]]
 name = "zmx_macros"

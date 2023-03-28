@@ -76,12 +76,9 @@ impl EndOfCentralDirectory {
     }
 
     /// Read an end-of-central-directory record.
-    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
-        let signature_bytes = reader.read_u32_le()?;
-        if signature_bytes != Self::signature() {
-            return Err(crate::Error::IncorrectSignature);
-        }
-
+    ///
+    /// It is assumed that the reader is positioned after the signature.
+    pub fn read_after_signature<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let disk_no = reader.read_u16_le()?;
         let start_central_dir_disk_no = reader.read_u16_le()?;
         let total_central_dir_entries_this_disk = reader.read_u16_le()?;
@@ -154,12 +151,9 @@ impl Zip64EndOfCentralDirectoryLocator {
     }
 
     /// Read a Zip64 end-of-central-directory locator record.
-    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
-        let signature_bytes = reader.read_u32_le()?;
-        if signature_bytes != Self::signature() {
-            return Err(crate::Error::IncorrectSignature);
-        }
-
+    ///
+    /// It is assumed that the reader is positioned after the signature.
+    pub fn read_after_signature<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let disk_no = reader.read_u32_le()?;
         let offset_on_disk = reader.read_u64_le()?;
         let total_disks = reader.read_u32_le()?;
@@ -242,13 +236,10 @@ impl Zip64EndOfCentralDirectory {
         Ok(())
     }
 
-    /// Read a Zip64 end-of-central-directory locator record.
-    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
-        let signature_bytes = reader.read_u32_le()?;
-        if signature_bytes != Self::signature() {
-            return Err(crate::Error::IncorrectSignature);
-        }
-
+    /// Read a Zip64 end-of-central-directory record.
+    ///
+    /// It is assumed that the reader is positioned after the signature.
+    pub fn read_after_signature<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let size = reader.read_u64_le()?;
         const FIXED_FIELDS_LEN: u64 = Zip64EndOfCentralDirectory::min_len() - Zip64EndOfCentralDirectory::min_len_bias();
         if size < FIXED_FIELDS_LEN {
@@ -394,7 +385,9 @@ impl CentralDirectoryHeader {
     }
 
     /// Read a central directory header record.
-    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
+    ///
+    /// It is assumed that the reader is positioned after the signature.
+    pub fn read_after_signature<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let signature_bytes = reader.read_u32_le()?;
         if signature_bytes != Self::signature() {
             return Err(crate::Error::IncorrectSignature);
@@ -490,9 +483,9 @@ impl Zip64ExtraField {
 
     /// Read the extra field, including its length.
     ///
-    /// It is assumed that its tag has already been read (to ensure the read function of the correct
+    /// It is assumed that its tag has just been read (to ensure the read function of the correct
     /// field is called).
-    pub fn read<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
+    pub fn read_after_tag<R: Read>(mut reader: R) -> Result<Self, crate::Error> {
         let length = reader.read_u16_le()?;
         if u64::from(length) != Self::min_len() {
             return Err(crate::Error::UnexpectedExtraDataLength(length));
