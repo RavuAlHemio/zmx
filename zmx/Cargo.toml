@@ -5,4 +5,5 @@ edition = "2021"
 default-run = "zmx"
 
 [dependencies]
+clap = { version = "4.2", features = ["derive"] }
 libzmx = { path = "../libzmx" }

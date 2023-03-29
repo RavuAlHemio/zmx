@@ -294,7 +294,7 @@ impl Zip64EndOfCentralDirectory {
 /// This contains information about a single directory entry.
 #[minimum_length(biased)]
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CentralDirectoryHeader {
+pub struct CentralDirectoryEntry {
     /// ZIP version supported by the software that created this entry.
     pub creator_version: u16,
 
@@ -343,7 +343,7 @@ pub struct CentralDirectoryHeader {
     /// Relative offset to the local file header.
     pub local_header_relative_offset: i32,
 }
-impl CentralDirectoryHeader {
+impl CentralDirectoryEntry {
     /// The constant signature of a Central Directory Header record.
     ///
     /// It is equivalent to `b"PK\x01\x02"`, interpreted as `u32` in little-endian byte order.
@@ -454,7 +454,7 @@ impl CentralDirectoryHeader {
 /// The "Zip64 Extended Information Extra Field" record.
 ///
 /// This is one of the possible fields in a central directory entry's
-/// [`extra_fields`](CentralDirectoryHeader::extra_fields).
+/// [`extra_fields`](CentralDirectoryEntry::extra_fields).
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Zip64ExtraField {
     /// The uncompressed size of this file.

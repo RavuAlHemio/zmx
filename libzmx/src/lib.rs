@@ -9,12 +9,11 @@ mod zip_format;
 
 
 use std::fmt;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 
-use io_ext::ReadExt;
-
+use crate::io_ext::{ReadExt, WriteExt};
 use crate::zip_format::{
-    CentralDirectoryHeader, EndOfCentralDirectory, Zip64EndOfCentralDirectory,
+    CentralDirectoryEntry, EndOfCentralDirectory, Zip64EndOfCentralDirectory,
     Zip64EndOfCentralDirectoryLocator,
 };
 
@@ -79,13 +78,49 @@ impl From<std::io::Error> for Error {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ZipCentralDirectoryEntry {
     /// The actual information about this entry.
-    pub entry: CentralDirectoryHeader,
+    pub entry: CentralDirectoryEntry,
 
     /// The number of the disk containing this central directory entry.
     pub disk: u32,
 
     /// The offset of this file's central directory entry from the beginning of its disk.
     pub offset: u64,
+}
+impl ZipCentralDirectoryEntry {
+    /// Returns whether this entry is executable.
+    ///
+    /// An entry is considered executable if all of the following conditions are met:
+    ///
+    /// * According to the DOS file attributes, the entry is not a directory. (In the lower half of
+    ///   the "external file attributes" field, the bit corresponding to the value 0x10 is not set.)
+    /// * The file has been created on a Unix system. (The upper byte of the "version made by" field
+    ///   is 0x03.)
+    /// * According to the Unix file attributes, the entry is a regular file. (In the top half of
+    ///   the "external file attributes" field, the bits extracted using the mask 0o170000 are
+    ///   0o100000.)
+    /// * According to the Unix file attributes, at least user or group or others have permission
+    ///   to execute the file. (In the top half of the "external file attributes" field, the bits
+    ///   extracted using the mask 0o000111 are not 0o000000.)
+    pub const fn is_executable(&self) -> bool {
+        let dos_attribs = (self.entry.external_attributes >> 0) & 0x0000FFFF;
+        if dos_attribs & 0x10 != 0 {
+            // it's a directory!
+            return false;
+        }
+
+        if ((self.entry.creator_version >> 8) & 0xFF) != 0x03 {
+            // entry does not come from Unix
+            return false;
+        }
+
+        let unix_attribs = (self.entry.external_attributes >> 16) & 0x0000FFFF;
+        if unix_attribs & 0o170000 != 0o100000 {
+            // not a regular file
+            return false;
+        }
+        // return whether at least u/g/o has x
+        unix_attribs & 0o000111 != 0o000000
+    }
 }
 
 
@@ -175,10 +210,10 @@ pub fn zip_get_files<F: Read + Seek>(mut zip_file: F) -> Result<Vec<ZipCentralDi
     loop {
         let file_header_loc = zip_file.seek(SeekFrom::Current(0))?;
         let signature = zip_file.read_u32_le()?;
-        if signature != CentralDirectoryHeader::signature() {
+        if signature != CentralDirectoryEntry::signature() {
             break;
         }
-        let cdh = CentralDirectoryHeader::read_after_signature(&mut zip_file)?;
+        let cdh = CentralDirectoryEntry::read_after_signature(&mut zip_file)?;
         file_names.push(ZipCentralDirectoryEntry {
             entry: cdh,
             disk: 0,
@@ -187,4 +222,97 @@ pub fn zip_get_files<F: Read + Seek>(mut zip_file: F) -> Result<Vec<ZipCentralDi
     }
 
     Ok(file_names)
+}
+
+
+/// Modifies the attributes of a ZIP file entry to make it executable.
+pub fn zip_make_executable<F: Read + Seek + Write>(mut zip_file: F, entry_header_offset: u64) -> Result<(), Error> {
+    // seek to the given offset
+    zip_file.seek(SeekFrom::Start(entry_header_offset))?;
+
+    // check for central directory entry
+    let signature = zip_file.read_u32_le()?;
+    if signature != CentralDirectoryEntry::signature() {
+        return Err(Error::IncorrectSignature);
+    }
+
+    // set upper byte of creator version to 0x03 (Unix)
+    let mut creator_version = zip_file.read_u16_le()?;
+    creator_version = (creator_version & 0x00FF) | 0x0300;
+    zip_file.seek(SeekFrom::Current(-2))?;
+    zip_file.write_u16_le(creator_version)?;
+
+    // skip the intervening fields
+    zip_file.seek(SeekFrom::Current(
+        2 // required_version
+        + 2 // general_purpose_bit_flag
+        + 2 // compression_method
+        + 2 // last_mod_file_time
+        + 2 // last_mod_file_date
+        + 4 // crc32
+        + 4 // compressed_size
+        + 4 // uncompressed_size
+        + 2 // file_name length
+        + 2 // extra_fields length
+        + 2 // file_comment length
+        + 2 // disk_number_start
+        + 2 // internal_attributes
+    ))?;
+
+    // add 0o000111 to upper byte pair of external attributes
+    let mut external_attributes = zip_file.read_u32_le()?;
+    external_attributes |= 0o000111 << 16;
+    zip_file.seek(SeekFrom::Current(-4))?;
+    zip_file.write_u32_le(external_attributes)?;
+
+    // done
+    Ok(())
+}
+
+
+/// Modifies the attributes of a ZIP file entry to make it not executable.
+pub fn zip_make_not_executable<F: Read + Seek + Write>(mut zip_file: F, entry_header_offset: u64) -> Result<(), Error> {
+    // seek to the given offset
+    zip_file.seek(SeekFrom::Start(entry_header_offset))?;
+
+    // check for central directory entry
+    let signature = zip_file.read_u32_le()?;
+    if signature != CentralDirectoryEntry::signature() {
+        return Err(Error::IncorrectSignature);
+    }
+
+    // check upper byte of creator version against 0x03 (Unix)
+    let creator_version = zip_file.read_u16_le()?;
+    if (creator_version & 0xFF00) != 0x0300 {
+        // not Unix, cannot be executable
+        return Ok(());
+    }
+
+    // skip the intervening fields
+    zip_file.seek(SeekFrom::Current(
+        2 // required_version
+        + 2 // general_purpose_bit_flag
+        + 2 // compression_method
+        + 2 // last_mod_file_time
+        + 2 // last_mod_file_date
+        + 4 // crc32
+        + 4 // compressed_size
+        + 4 // uncompressed_size
+        + 2 // file_name length
+        + 2 // extra_fields length
+        + 2 // file_comment length
+        + 2 // disk_number_start
+        + 2 // internal_attributes
+    ))?;
+
+    // remove 0o000111 from upper byte pair of external attributes (if necessary)
+    let mut external_attributes = zip_file.read_u32_le()?;
+    if (external_attributes & (0o000111 << 16)) != 0 {
+        external_attributes &= !(0o000111 << 16);
+        zip_file.seek(SeekFrom::Current(-4))?;
+        zip_file.write_u32_le(external_attributes)?;
+    }
+
+    // done
+    Ok(())
 }
