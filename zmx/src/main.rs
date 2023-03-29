@@ -32,6 +32,16 @@ fn main() -> ExitCode {
         // collect entry names
         let entries = zip_get_files(&mut zip_file)
             .expect("failed to get file list from ZIP file");
+
+        if opts.executable_files.len() == 0 {
+            // no file names specified; output current state of things
+            for cde in &entries {
+                let entry_name = best_effort_decode(&cde.entry.file_name);
+                println!("{} {}", if cde.is_executable() { 'x' } else { ' ' }, entry_name);
+            }
+            return ExitCode::SUCCESS;
+        }
+
         let name_to_entry: HashMap<&[u8], &ZipCentralDirectoryEntry> = entries
             .iter()
             .map(|e| (e.entry.file_name.as_slice(), e))
