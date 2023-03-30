@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 libzmx = { path = "../libzmx" }
+once_cell = { version = "1.17" }
 
 [dependencies.windows]
 version = "0.46"
@@ -15,3 +16,6 @@ features = [
     "Win32_UI_Controls_Dialogs",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+[build-dependencies]
+winres = { version = "0.1" }
