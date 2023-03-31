@@ -1,3 +1,5 @@
+mod graphics;
+mod releasers;
 mod string_holder;
 
 
@@ -13,22 +15,24 @@ use std::sync::Mutex;
 use libzmx::{ZipCentralDirectoryEntry, zip_get_files};
 use once_cell::sync::OnceCell;
 use windows::w;
-use windows::core::PWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW, GetMessageW, IDC_ARROW,
-    IDI_APPLICATION, LoadCursorW, LoadIconW, MB_ICONERROR, MB_OK, MESSAGEBOX_RESULT,
-    MESSAGEBOX_STYLE, MessageBoxW, MSG, PostQuitMessage, RegisterClassExW, ShowWindow,
-    SW_SHOWDEFAULT, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_SIZE, WNDCLASSEXW,
-    WNDCLASS_STYLES, WS_OVERLAPPEDWINDOW,
+    BS_CENTER, BS_PUSHBUTTON, CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW,
+    GetMessageW, GetWindowRect, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LBS_NOTIFY, LoadCursorW, LoadIconW,
+    MB_ICONERROR, MB_OK, MESSAGEBOX_RESULT, MESSAGEBOX_STYLE, MessageBoxW, MoveWindow, MSG,
+    PostQuitMessage, RegisterClassExW, SendMessageW, ShowWindow, SW_SHOW, SW_SHOWDEFAULT, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES,
+    WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VSCROLL,
 };
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_ENABLESIZING, OFN_EXPLORER, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST,
     OPENFILENAMEW,
 };
 
+use crate::graphics::{get_system_font, Scaler};
 use crate::string_holder::StringHolder;
 
 
@@ -38,6 +42,7 @@ struct State {
     pub file_path: PathBuf,
     pub entries: Vec<ZipCentralDirectoryEntry>,
 
+    pub instance: HINSTANCE,
     pub main_window: HWND,
     pub list_box: HWND,
     pub button: HWND,
@@ -48,22 +53,140 @@ static STATE: OnceCell<Mutex<State>> = OnceCell::new();
 
 
 extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    println!("got message {}", msg);
     if msg == WM_DESTROY {
         unsafe { PostQuitMessage(0) };
+        LRESULT(0)
+    } else if msg == WM_CREATE {
+        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        handle_window_create(&mut *state_guard, hwnd);
         LRESULT(0)
     } else if msg == WM_SIZE {
         let width = (((lparam.0 as usize) >> 0) & 0xFFFF) as u16;
         let height = (((lparam.0 as usize) >> 16) & 0xFFFF) as u16;
-        handle_window_resized(hwnd, width, height);
+        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        handle_window_resized(&mut *state_guard, hwnd, width.into(), height.into());
+        LRESULT(0)
+    } else if msg == WM_DPICHANGED {
+        let rect = unsafe { (lparam.0 as *const RECT).as_ref() }.unwrap();
+        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        handle_window_resized(
+            &mut *state_guard,
+            hwnd,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+        );
         LRESULT(0)
     } else {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 }
 
-fn handle_window_resized(hwnd: HWND, width: u16, height: u16) {
+fn handle_window_create(state: &mut State, hwnd: HWND) {
+    // obtain the system font
+    let system_font = match get_system_font(Some(hwnd)) {
+        Some(sf) => sf,
+        None => return, // error already output in message box
+    };
 
+    // create the list box
+    let list_box = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("LISTBOX"),
+            PCWSTR::null(),
+            WINDOW_STYLE(LBS_NOTIFY as u32) | WS_BORDER | WS_CHILD | WS_TABSTOP | WS_VSCROLL,
+            0, 0,
+            32, 32,
+            hwnd,
+            None,
+            state.instance,
+            None,
+        )
+    };
+    if list_box == HWND::default() {
+        let error_message = format!("failed to create list box: {}", windows::core::Error::from_win32());
+        show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
+        return;
+    }
+    state.list_box = list_box;
+    unsafe { ShowWindow(list_box, SW_SHOW) };
+
+    // create the enable/disable button
+    let button = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("way too many letters for this puny button"),
+            WINDOW_STYLE((BS_CENTER | BS_PUSHBUTTON) as u32) | WS_CHILD | WS_TABSTOP,
+            0, 0,
+            32, 32,
+            hwnd,
+            None,
+            state.instance,
+            None,
+        )
+    };
+    if button == HWND::default() {
+        let error_message = format!("failed to create button: {}", windows::core::Error::from_win32());
+        show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
+        return;
+    }
+    state.button = button;
+    unsafe { SendMessageW(button, WM_SETFONT, WPARAM(system_font.0 as usize), LPARAM(FALSE.0 as isize)) };
+    unsafe { ShowWindow(button, SW_SHOW) };
+
+    let mut window_rect = RECT::default();
+    let result = unsafe { GetWindowRect(hwnd, &mut window_rect) };
+    if !result.as_bool() {
+        show_message_box(None, "failed to get window rect", MB_ICONERROR | MB_OK);
+        return;
+    }
+
+    handle_window_resized(
+        state,
+        hwnd,
+        window_rect.right - window_rect.left,
+        window_rect.bottom - window_rect.top,
+    );
+}
+
+fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32) {
+    if hwnd != state.main_window {
+        return;
+    }
+
+    // prepare a scaler
+    let scaler = match Scaler::new_from_window(hwnd) {
+        Some(s) => s,
+        None => return,
+    };
+
+    // default margin: 7 DLUs, padding: 4 DLUs
+    let (margin_x, margin_y) = scaler.scale_xy(7, 7);
+    let (_padding_x, padding_y) = scaler.scale_xy(4, 4);
+
+    // button: width at least 50 DLUs, height 13 DLUs
+    let (button_min_width, button_height) = scaler.scale_xy(50, 13);
+    unsafe {
+        MoveWindow(
+            state.button,
+            width - (margin_x + button_min_width),
+            height - (margin_y + button_height),
+            button_min_width, button_height,
+            true,
+        )
+    };
+
+    // fill the window with the list box
+    unsafe {
+        MoveWindow(
+            state.list_box,
+            margin_x, margin_y,
+            width - 2*margin_x,
+            height - (2*margin_y + button_height + padding_y),
+            true,
+        )
+    };
 }
 
 fn show_message_box(parent_hwnd: Option<HWND>, text: &str, style: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
@@ -132,10 +255,21 @@ fn main() -> ExitCode {
         },
     };
 
+    let instance_res = unsafe { GetModuleHandleW(None) };
+    let instance = match instance_res {
+        Ok(i) => i,
+        Err(e) => {
+            let text = format!("failed to obtain my own instance: {}", e);
+            show_message_box(None, &text, MB_ICONERROR | MB_OK);
+            return ExitCode::FAILURE;
+        },
+    };
+
     let state = State {
         zip_file,
         file_path,
         entries: Vec::new(),
+        instance,
         main_window: HWND::default(),
         list_box: HWND::default(),
         button: HWND::default(),
@@ -161,9 +295,6 @@ fn main() -> ExitCode {
             },
         };
     }
-
-    let instance = unsafe { GetModuleHandleW(None) }
-        .expect("failed to obtain my own instance");
 
     let main_window_class = StringHolder::from_str("WinZMX-MainWindow");
 
@@ -225,6 +356,12 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // store this as the main window
+    {
+        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        state_guard.main_window = window;
+    }
+
     // show the window
     unsafe {
         ShowWindow(window, SW_SHOWDEFAULT)
@@ -249,6 +386,12 @@ fn main() -> ExitCode {
             let error_message = format!("failed to obtain message: {}", windows::core::Error::from_win32());
             show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
             return ExitCode::FAILURE;
+        }
+
+        // dialog message?
+        let is_dialog = unsafe { IsDialogMessageW(window, &msg) };
+        if is_dialog.as_bool() {
+            continue;
         }
 
         // regular message

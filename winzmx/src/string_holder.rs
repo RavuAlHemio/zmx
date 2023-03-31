@@ -53,6 +53,26 @@ impl StringHolder {
         }
     }
 
+    /// Creates a new StringHolder by copying u16s from the given slice until a NUL u16 is
+    /// encountered or the end of the slice is reached.
+    pub fn from_slice_nul_terminated(slice: &[u16]) -> Self {
+        let mut words = Vec::with_capacity(slice.len()+1);
+        for &word in slice {
+            words.push(word);
+            if word == 0x0000 {
+                return Self {
+                    words,
+                };
+            }
+        }
+        // we reached the end of the slice without encountering a NUL
+        // append it before we return
+        words.push(0x0000);
+        Self {
+            words,
+        }
+    }
+
     /// The length of the string in this StringHolder, in units of u16s.
     ///
     /// Depending on the argument, counts the terminating NUL character or not.
@@ -83,5 +103,22 @@ impl StringHolder {
     #[inline]
     pub fn as_pcwstr(&self) -> PCWSTR {
         PCWSTR(self.as_ptr())
+    }
+
+    /// Attempt to decode the held string as UTF-16.
+    ///
+    /// Returns `None` if the held string is not valid UTF-16.
+    pub fn try_to_string(&self) -> Option<String> {
+        String::from_utf16(self.as_slice(false)).ok()
+    }
+
+    /// The string as a slice of u16s, with or without the terminating NUL.
+    #[inline]
+    pub fn as_slice(&self, include_nul: bool) -> &[u16] {
+        if include_nul {
+            &self.words[0..self.words.len()]
+        } else {
+            &self.words[0..self.words.len()-1]
+        }
     }
 }
