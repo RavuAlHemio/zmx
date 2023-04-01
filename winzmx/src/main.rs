@@ -13,22 +13,27 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Mutex;
 
-use libzmx::{ZipCentralDirectoryEntry, zip_get_files};
+use libzmx::{
+    ZipCentralDirectoryEntry, best_effort_decode, zip_get_files, zip_make_executable,
+    zip_make_not_executable,
+};
 use once_cell::sync::OnceCell;
 use windows::w;
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{FALSE, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{FALSE, HMODULE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BS_CENTER, BS_PUSHBUTTON, CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW,
-    GetMessageW, GetWindowRect, HWND_TOP, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW,
-    LB_ADDSTRING, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONERROR, MB_OK, MESSAGEBOX_RESULT,
+    BN_CLICKED, BS_CENTER, BS_PUSHBUTTON, CreateWindowExW, CW_USEDEFAULT, DefWindowProcW,
+    DispatchMessageW, GetMessageW, GetWindowRect, HWND_TOP, IDC_ARROW, IDI_APPLICATION,
+    IsDialogMessageW, LB_ADDSTRING, LB_GETSELCOUNT, LB_GETSELITEMS, LB_RESETCONTENT, LBN_SELCHANGE,
+    LBS_EXTENDEDSEL, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONERROR, MB_OK, MESSAGEBOX_RESULT,
     MESSAGEBOX_STYLE, MessageBoxW, MoveWindow, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
-    SetWindowPos, SET_WINDOW_POS_FLAGS, ShowWindow, SW_SHOW, SW_SHOWDEFAULT, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_GETFONT, WM_SETFONT,
-    WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WS_BORDER, WS_CHILD, WS_DISABLED, WS_OVERLAPPEDWINDOW,
-    WS_TABSTOP, WS_VSCROLL,
+    SetWindowPos, SET_WINDOW_POS_FLAGS, SetWindowTextW, ShowWindow, SW_SHOW, SW_SHOWDEFAULT,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+    WM_DPICHANGED, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WS_BORDER, WS_CHILD,
+    WS_DISABLED, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VSCROLL,
 };
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_ENABLESIZING, OFN_EXPLORER, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST,
@@ -37,6 +42,10 @@ use windows::Win32::UI::Controls::Dialogs::{
 
 use crate::graphics::{get_system_font, RectExt, Scaler};
 use crate::string_holder::StringHolder;
+
+
+const CHECKBOX_EMPTY: char = '\u{2610}';
+const CHECKBOX_TICKED: char = '\u{2611}';
 
 
 /// The current state of the application.
@@ -69,6 +78,22 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
         let height = (((lparam.0 as usize) >> 16) & 0xFFFF) as u16;
         let mut state_guard = STATE.get().unwrap().lock().unwrap();
         handle_window_resized(&mut *state_guard, hwnd, width.into(), height.into());
+        LRESULT(0)
+    } else if msg == WM_COMMAND {
+        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        let notif_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+        if lparam.0 == state_guard.list_box.0 {
+            // it's the list box
+            if notif_code == LBN_SELCHANGE {
+                // alright then
+                handle_list_selection_changed(&mut *state_guard);
+            }
+        } else if lparam.0 == state_guard.button.0 {
+            // it's the button
+            if notif_code == BN_CLICKED {
+                handle_button_clicked(&mut *state_guard);
+            }
+        }
         LRESULT(0)
     } else if msg == WM_DPICHANGED {
         {
@@ -107,7 +132,7 @@ fn handle_window_create(state: &mut State, hwnd: HWND) {
             WINDOW_EX_STYLE::default(),
             w!("LISTBOX"),
             PCWSTR::null(),
-            WINDOW_STYLE(LBS_NOTIFY as u32) | WS_BORDER | WS_CHILD | WS_TABSTOP | WS_VSCROLL,
+            WINDOW_STYLE((LBS_NOTIFY | LBS_EXTENDEDSEL) as u32) | WS_BORDER | WS_CHILD | WS_TABSTOP | WS_VSCROLL,
             0, 0,
             32, 32,
             hwnd,
@@ -122,8 +147,7 @@ fn handle_window_create(state: &mut State, hwnd: HWND) {
         return;
     }
     state.list_box = list_box;
-    let test_text = w!("THE FAKEST OF ALL ENTRIES");
-    unsafe { SendMessageW(list_box, LB_ADDSTRING, WPARAM(0), LPARAM(test_text.0 as isize)) };
+    populate_list_box_from_entries(state);
     unsafe { SendMessageW(list_box, WM_SETFONT, WPARAM(system_font.0 as usize), LPARAM(FALSE.0 as isize)) };
     unsafe { ShowWindow(list_box, SW_SHOW) };
 
@@ -218,6 +242,99 @@ fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32)
     if !new_font.is_invalid() {
         // also update the font
         unsafe { SendMessageW(state.list_box, WM_SETFONT, WPARAM(new_font.0 as usize), LPARAM(FALSE.0 as isize)) };
+    }
+}
+
+fn handle_list_selection_changed(state: &mut State) {
+    // activate or deactivate our button
+
+    // which items are selected?
+    let sel_count = unsafe { SendMessageW(state.list_box, LB_GETSELCOUNT, WPARAM(0), LPARAM(0)) };
+    if sel_count.0 == 0 {
+        // disable the button and jump out
+        unsafe { EnableWindow(state.button, FALSE) };
+        return;
+    }
+
+    let mut selected_buf = vec![0u32; sel_count.0 as usize];
+    unsafe { SendMessageW(state.list_box, LB_GETSELITEMS, WPARAM(sel_count.0 as usize), LPARAM(selected_buf.as_mut_ptr() as isize)) };
+
+    // what type of items are selected?
+    let mut all_executable = true;
+    let mut all_not_executable = true;
+    for index_u32 in selected_buf {
+        let index: usize = index_u32.try_into().unwrap();
+        if state.entries[index].is_executable() {
+            all_not_executable = false;
+        } else {
+            all_executable = false;
+        }
+    }
+
+    if all_executable {
+        unsafe { SetWindowTextW(state.button, w!("make non-&executable")) };
+        unsafe { EnableWindow(state.button, TRUE) };
+    } else if all_not_executable {
+        unsafe { SetWindowTextW(state.button, w!("make &executable")) };
+        unsafe { EnableWindow(state.button, TRUE) };
+    } else {
+        unsafe { EnableWindow(state.button, FALSE) };
+    }
+}
+
+fn handle_button_clicked(state: &mut State) {
+    // which items are selected?
+    let sel_count = unsafe { SendMessageW(state.list_box, LB_GETSELCOUNT, WPARAM(0), LPARAM(0)) };
+    if sel_count.0 == 0 {
+        // not much to do here
+        return;
+    }
+
+    let mut selected_buf = vec![0u32; sel_count.0 as usize];
+    unsafe { SendMessageW(state.list_box, LB_GETSELITEMS, WPARAM(sel_count.0 as usize), LPARAM(selected_buf.as_mut_ptr() as isize)) };
+
+    let first_selected: usize = selected_buf[0].try_into().unwrap();
+    let make_executable = !state.entries[first_selected].is_executable();
+
+    for index_u32 in selected_buf {
+        let index: usize = index_u32.try_into().unwrap();
+        let entry = &state.entries[index];
+        let file_name = best_effort_decode(&entry.entry.file_name);
+        if make_executable {
+            if let Err(e) = zip_make_executable(&mut state.zip_file, entry.offset) {
+                let message = format!("failed to make {:?} ({}) executable:\r\n{}", file_name, entry.offset, e);
+                show_message_box(Some(state.main_window), &message, MB_OK | MB_ICONERROR);
+            }
+        } else {
+            if let Err(e) = zip_make_not_executable(&mut state.zip_file, entry.offset) {
+                let message = format!("failed to make {:?} ({}) non-executable:\r\n{}", file_name, entry.offset, e);
+                show_message_box(Some(state.main_window), &message, MB_OK | MB_ICONERROR);
+            }
+        }
+    }
+
+    // reload all entries
+    unsafe { SendMessageW(state.list_box, LB_RESETCONTENT, WPARAM(0), LPARAM(0)) };
+    let entries = match zip_get_files(&mut state.zip_file) {
+        Ok(f) => f,
+        Err(e) => {
+            let message = format!("failed to obtain fresh list of ZIP entries:\r\n{}", e);
+            show_message_box(Some(state.main_window), &message, MB_OK | MB_ICONERROR);
+            return;
+        },
+    };
+    state.entries = entries;
+    state.entries.sort_unstable_by_key(|e| e.entry.file_name.clone());
+    populate_list_box_from_entries(state);
+}
+
+fn populate_list_box_from_entries(state: &mut State) {
+    for entry in &state.entries {
+        let checkbox = if entry.is_executable() { CHECKBOX_TICKED } else { CHECKBOX_EMPTY };
+        let entry_name = best_effort_decode(&entry.entry.file_name);
+        let entry_text = format!("{} {}", checkbox, entry_name);
+        let entry_text_holder = StringHolder::from_str(&entry_text);
+        unsafe { SendMessageW(state.list_box, LB_ADDSTRING, WPARAM(0), LPARAM(entry_text_holder.as_ptr() as isize)) };
     }
 }
 
@@ -319,6 +436,7 @@ fn main() -> ExitCode {
         match zip_get_files(&state_guard.zip_file) {
             Ok(mut ze) => {
                 state_guard.entries.append(&mut ze);
+                state_guard.entries.sort_unstable_by_key(|e| e.entry.file_name.clone());
             },
             Err(e) => {
                 let text = format!("failed to list {} entries: {}", state_guard.file_path.display(), e);
