@@ -121,4 +121,28 @@ impl StringHolder {
             &self.words[0..self.words.len()-1]
         }
     }
+
+    /// Appends a string to this StringHolder.
+    pub fn append_str(&mut self, s: &str) {
+        assert_eq!(*self.words.last().unwrap(), 0x0000);
+        self.words.pop();
+        for word in s.encode_utf16() {
+            self.words.push(word);
+        }
+        self.words.push(0x0000);
+    }
+
+    /// Whether the string in this StringHolder starts with the given text.
+    pub fn starts_with(&self, needle: &str) -> bool {
+        let needle_u16: Vec<u16> = needle.encode_utf16().collect();
+        let me_slice = self.as_slice(false);
+        me_slice.starts_with(&needle_u16)
+    }
+
+    /// Whether the string in this StringHolder ends with the given text.
+    pub fn ends_with(&self, needle: &str) -> bool {
+        let needle_u16: Vec<u16> = needle.encode_utf16().collect();
+        let me_slice = self.as_slice(false);
+        me_slice.ends_with(&needle_u16)
+    }
 }

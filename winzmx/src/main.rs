@@ -1,3 +1,4 @@
+mod dynamic_linking;
 mod graphics;
 mod releasers;
 mod string_holder;
@@ -16,23 +17,25 @@ use libzmx::{ZipCentralDirectoryEntry, zip_get_files};
 use once_cell::sync::OnceCell;
 use windows::w;
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{FALSE, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BS_CENTER, BS_PUSHBUTTON, CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW,
-    GetMessageW, GetWindowRect, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, LBS_NOTIFY, LoadCursorW, LoadIconW,
-    MB_ICONERROR, MB_OK, MESSAGEBOX_RESULT, MESSAGEBOX_STYLE, MessageBoxW, MoveWindow, MSG,
-    PostQuitMessage, RegisterClassExW, SendMessageW, ShowWindow, SW_SHOW, SW_SHOWDEFAULT, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES,
-    WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VSCROLL,
+    GetMessageW, GetWindowRect, HWND_TOP, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW,
+    LB_ADDSTRING, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONERROR, MB_OK, MESSAGEBOX_RESULT,
+    MESSAGEBOX_STYLE, MessageBoxW, MoveWindow, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
+    SetWindowPos, SET_WINDOW_POS_FLAGS, ShowWindow, SW_SHOW, SW_SHOWDEFAULT, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_SETFONT, WM_SIZE,
+    WNDCLASSEXW, WNDCLASS_STYLES, WS_BORDER, WS_CHILD, WS_DISABLED, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+    WS_VSCROLL,
 };
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_ENABLESIZING, OFN_EXPLORER, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST,
     OPENFILENAMEW,
 };
 
-use crate::graphics::{get_system_font, Scaler};
+use crate::graphics::{get_system_font, RectExt, Scaler};
 use crate::string_holder::StringHolder;
 
 
@@ -42,7 +45,7 @@ struct State {
     pub file_path: PathBuf,
     pub entries: Vec<ZipCentralDirectoryEntry>,
 
-    pub instance: HINSTANCE,
+    pub instance: HMODULE,
     pub main_window: HWND,
     pub list_box: HWND,
     pub button: HWND,
@@ -68,13 +71,18 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
         LRESULT(0)
     } else if msg == WM_DPICHANGED {
         let rect = unsafe { (lparam.0 as *const RECT).as_ref() }.unwrap();
-        let mut state_guard = STATE.get().unwrap().lock().unwrap();
-        handle_window_resized(
-            &mut *state_guard,
-            hwnd,
-            rect.right - rect.left,
-            rect.bottom - rect.top,
-        );
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_TOP,
+                rect.left,
+                rect.top,
+                rect.width(),
+                rect.height(),
+                SET_WINDOW_POS_FLAGS::default(),
+            )
+        };
+        // this also leads to a WM_SIZE message, which triggers the resize logic
         LRESULT(0)
     } else {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -109,6 +117,9 @@ fn handle_window_create(state: &mut State, hwnd: HWND) {
         return;
     }
     state.list_box = list_box;
+    let test_text = w!("THE FAKEST OF ALL ENTRIES");
+    unsafe { SendMessageW(list_box, LB_ADDSTRING, WPARAM(0), LPARAM(test_text.0 as isize)) };
+    unsafe { SendMessageW(list_box, WM_SETFONT, WPARAM(system_font.0 as usize), LPARAM(FALSE.0 as isize)) };
     unsafe { ShowWindow(list_box, SW_SHOW) };
 
     // create the enable/disable button
@@ -116,8 +127,8 @@ fn handle_window_create(state: &mut State, hwnd: HWND) {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
-            w!("way too many letters for this puny button"),
-            WINDOW_STYLE((BS_CENTER | BS_PUSHBUTTON) as u32) | WS_CHILD | WS_TABSTOP,
+            w!("make non-&executable"),
+            WINDOW_STYLE((BS_CENTER | BS_PUSHBUTTON) as u32) | WS_CHILD | WS_DISABLED | WS_TABSTOP,
             0, 0,
             32, 32,
             hwnd,
@@ -166,7 +177,8 @@ fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32)
     let (_padding_x, padding_y) = scaler.scale_xy(4, 4);
 
     // button: width at least 50 DLUs, height 13 DLUs
-    let (button_min_width, button_height) = scaler.scale_xy(50, 13);
+    // we need more than 50 though
+    let (button_min_width, button_height) = scaler.scale_xy(80, 13);
     unsafe {
         MoveWindow(
             state.button,

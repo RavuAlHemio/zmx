@@ -1,10 +1,10 @@
 use std::ffi::c_void;
 use std::mem::size_of_val;
 
-use windows::Win32::Foundation::{HWND, SIZE};
+use windows::Win32::Foundation::{HWND, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     CreateFontIndirectW, GetDC, GetDeviceCaps, GetTextExtentPoint32W, GetTextMetricsW, HFONT,
-    LOGPIXELSX, LOGPIXELSY, SelectObject, TEXTMETRICW,
+    LOGPIXELSX, SelectObject, TEXTMETRICW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONERROR, MB_OK, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
@@ -12,8 +12,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::show_message_box;
+use crate::dynamic_linking::GET_DPI_FOR_WINDOW;
 use crate::releasers::{ContextSaverRestorer, DeviceContext, GdiFont};
 use crate::string_holder::StringHolder;
+
+
+/// Extensions to rectangular types.
+pub trait RectExt {
+    type BackingType;
+
+    fn width(&self) -> Self::BackingType;
+    fn height(&self) -> Self::BackingType;
+}
+impl RectExt for RECT {
+    type BackingType = i32;
+
+    #[inline] fn width(&self) -> i32 { self.right - self.left }
+    #[inline] fn height(&self) -> i32 { self.bottom - self.top }
+}
 
 
 pub fn get_system_font(message_box_parent: Option<HWND>) -> Option<HFONT> {
@@ -62,7 +78,18 @@ impl Scaler {
             return None;
         }
         let dc = DeviceContext::new(hwnd, raw_dc);
-        // TODO: test whether GetDeviceCaps(hdcScreen, LOGPIXELSX) [and LOGPIXELSY] works per-screen
+
+        // get DPI for the main screen
+        let main_screen_dpi = unsafe { GetDeviceCaps(dc.context, LOGPIXELSX) };
+
+        // get DPI for the current screen, if possible
+        let current_screen_dpi = if let Some(get_dpi_for_window) = *GET_DPI_FOR_WINDOW {
+            unsafe { get_dpi_for_window(hwnd) as f64 }
+        } else {
+            main_screen_dpi as f64
+        };
+        let dpi_scaling_factor = current_screen_dpi / (main_screen_dpi as f64);
+
         let _save_context = ContextSaverRestorer::new(dc.context);
 
         // activate the font on the context
@@ -91,7 +118,7 @@ impl Scaler {
         // baseY is the height of the font
         // baseX is the average width of a letter in the font
         //          (MS Q145994 does some rounding magic to it)
-        let base_y = text_metrics.tmHeight;
+        let base_y = ((text_metrics.tmHeight as f64) * dpi_scaling_factor) as i32;
         let alphabet = StringHolder::from_str("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
         let mut size = SIZE::default();
         let result = unsafe {
@@ -105,7 +132,7 @@ impl Scaler {
             show_message_box(Some(hwnd), "failed to obtain text extent", MB_ICONERROR | MB_OK);
             return None;
         }
-        let base_x = (size.cx / 26 + 1) / 2;
+        let base_x = ((((size.cx / 26 + 1) / 2) as f64) * dpi_scaling_factor) as i32;
 
         Some(Self {
             base_x,
