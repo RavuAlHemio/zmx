@@ -18,7 +18,7 @@ use once_cell::sync::OnceCell;
 use windows::w;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{FALSE, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
+use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BS_CENTER, BS_PUSHBUTTON, CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW,
@@ -26,9 +26,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LB_ADDSTRING, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONERROR, MB_OK, MESSAGEBOX_RESULT,
     MESSAGEBOX_STYLE, MessageBoxW, MoveWindow, MSG, PostQuitMessage, RegisterClassExW, SendMessageW,
     SetWindowPos, SET_WINDOW_POS_FLAGS, ShowWindow, SW_SHOW, SW_SHOWDEFAULT, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_SETFONT, WM_SIZE,
-    WNDCLASSEXW, WNDCLASS_STYLES, WS_BORDER, WS_CHILD, WS_DISABLED, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-    WS_VSCROLL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_GETFONT, WM_SETFONT,
+    WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES, WS_BORDER, WS_CHILD, WS_DISABLED, WS_OVERLAPPEDWINDOW,
+    WS_TABSTOP, WS_VSCROLL,
 };
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_ENABLESIZING, OFN_EXPLORER, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST,
@@ -49,6 +49,7 @@ struct State {
     pub main_window: HWND,
     pub list_box: HWND,
     pub button: HWND,
+    pub needs_new_font: bool,
 }
 
 
@@ -70,6 +71,10 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
         handle_window_resized(&mut *state_guard, hwnd, width.into(), height.into());
         LRESULT(0)
     } else if msg == WM_DPICHANGED {
+        {
+            let mut state_guard = STATE.get().unwrap().lock().unwrap();
+            state_guard.needs_new_font = true;
+        }
         let rect = unsafe { (lparam.0 as *const RECT).as_ref() }.unwrap();
         unsafe {
             SetWindowPos(
@@ -91,7 +96,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
 
 fn handle_window_create(state: &mut State, hwnd: HWND) {
     // obtain the system font
-    let system_font = match get_system_font(Some(hwnd)) {
+    let system_font = match get_system_font(Some(hwnd), 1.0) {
         Some(sf) => sf,
         None => return, // error already output in message box
     };
@@ -176,6 +181,13 @@ fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32)
     let (margin_x, margin_y) = scaler.scale_xy(7, 7);
     let (_padding_x, padding_y) = scaler.scale_xy(4, 4);
 
+    let mut new_font = HFONT(0);
+    if state.needs_new_font {
+        new_font = get_system_font(Some(hwnd), scaler.dpi_scaling_factor())
+            .unwrap_or(HFONT(0));
+        state.needs_new_font = false;
+    }
+
     // button: width at least 50 DLUs, height 13 DLUs
     // we need more than 50 though
     let (button_min_width, button_height) = scaler.scale_xy(80, 13);
@@ -188,6 +200,10 @@ fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32)
             true,
         )
     };
+    if !new_font.is_invalid() {
+        // also update the font
+        unsafe { SendMessageW(state.button, WM_SETFONT, WPARAM(new_font.0 as usize), LPARAM(FALSE.0 as isize)) };
+    }
 
     // fill the window with the list box
     unsafe {
@@ -199,6 +215,10 @@ fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32)
             true,
         )
     };
+    if !new_font.is_invalid() {
+        // also update the font
+        unsafe { SendMessageW(state.list_box, WM_SETFONT, WPARAM(new_font.0 as usize), LPARAM(FALSE.0 as isize)) };
+    }
 }
 
 fn show_message_box(parent_hwnd: Option<HWND>, text: &str, style: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
@@ -285,6 +305,7 @@ fn main() -> ExitCode {
         main_window: HWND::default(),
         list_box: HWND::default(),
         button: HWND::default(),
+        needs_new_font: false,
     };
 
     if let Err(_) = STATE.set(Mutex::new(state)) {

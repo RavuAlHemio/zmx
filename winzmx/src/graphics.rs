@@ -32,7 +32,7 @@ impl RectExt for RECT {
 }
 
 
-pub fn get_system_font(message_box_parent: Option<HWND>) -> Option<HFONT> {
+pub fn get_system_font(message_box_parent: Option<HWND>, dpi_scaling_factor: f64) -> Option<HFONT> {
     let mut ncm = NONCLIENTMETRICSW::default();
     ncm.cbSize = size_of_val(&ncm).try_into().unwrap();
     let result = unsafe {
@@ -43,6 +43,9 @@ pub fn get_system_font(message_box_parent: Option<HWND>) -> Option<HFONT> {
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
         )
     };
+
+    ncm.lfMessageFont.lfHeight = ((ncm.lfMessageFont.lfHeight as f64) * dpi_scaling_factor) as i32;
+
     if !result.as_bool() {
         let error = windows::core::Error::from_win32();
         let text = format!("failed to obtain non-client metrics: {}", error);
@@ -62,13 +65,14 @@ pub fn get_system_font(message_box_parent: Option<HWND>) -> Option<HFONT> {
 pub struct Scaler {
     base_x: i32,
     base_y: i32,
+    dpi_scaling_factor: f64,
 }
 impl Scaler {
     pub fn new_from_window(hwnd: HWND) -> Option<Self> {
         // https://learn.microsoft.com/en-us/previous-versions/ms997619(v=msdn.10)
         // https://learn.microsoft.com/en-us/previous-versions/windows/desktop/bb226818%28v=vs.85%29
         // https://stackoverflow.com/a/58689/679474
-        let raw_font = get_system_font(Some(hwnd))?;
+        let raw_font = get_system_font(Some(hwnd), 1.0)?;
         let font = GdiFont(raw_font);
 
         // obtain the device context
@@ -137,6 +141,7 @@ impl Scaler {
         Some(Self {
             base_x,
             base_y,
+            dpi_scaling_factor,
         })
     }
 
@@ -154,4 +159,12 @@ impl Scaler {
     pub fn scale_xy(&self, x_dlu: i32, y_dlu: i32) -> (i32, i32) {
         (self.scale_x(x_dlu), self.scale_y(y_dlu))
     }
+
+    #[inline]
+    pub fn scale_font_size(&self, size: i32) -> i32 {
+        ((size as f64) * self.dpi_scaling_factor) as i32
+    }
+
+    #[inline]
+    pub const fn dpi_scaling_factor(&self) -> f64 { self.dpi_scaling_factor }
 }
