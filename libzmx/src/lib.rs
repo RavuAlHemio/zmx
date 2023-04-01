@@ -259,8 +259,14 @@ pub fn zip_make_executable<F: Read + Seek + Write>(mut zip_file: F, entry_header
         + 2 // internal_attributes
     ))?;
 
-    // add 0o000111 to upper byte pair of external attributes
+    // perform this change to upper byte pair of external attributes:
+    // 1. ensure bytes 0o170000 are set to 0o100000
+    // 2. ensure bits 0o000111 are set
     let mut external_attributes = zip_file.read_u32_le()?;
+    external_attributes =
+        (external_attributes & ((0o170000 << 16) ^ 0xFFFF_FFFF))
+        | (0o100000 << 16)
+    ;
     external_attributes |= 0o000111 << 16;
     zip_file.seek(SeekFrom::Current(-4))?;
     zip_file.write_u32_le(external_attributes)?;
