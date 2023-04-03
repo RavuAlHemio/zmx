@@ -372,7 +372,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
 
-        PathBuf::from(OsString::from_wide(unsafe { ofnw.lpstrFile.as_wide() }))
+        // force alignment by making a local copy (necessary on x86_32)
+        let file_aligned = ofnw.lpstrFile;
+        PathBuf::from(OsString::from_wide(unsafe { file_aligned.as_wide() }))
     } else if args.len() == 2 {
         // take ZIP path from argument
         PathBuf::from(&args[1])
