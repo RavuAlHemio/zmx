@@ -46,8 +46,7 @@ pub fn get_system_font(message_box_parent: Option<HWND>, dpi_scaling_factor: f64
 
     ncm.lfMessageFont.lfHeight = ((ncm.lfMessageFont.lfHeight as f64) * dpi_scaling_factor) as i32;
 
-    if !result.as_bool() {
-        let error = windows::core::Error::from_win32();
+    if let Err(error) = result {
         let text = format!("failed to obtain non-client metrics: {}", error);
         show_message_box(message_box_parent, &text, MB_ICONERROR | MB_OK);
         return None;

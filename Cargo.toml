@@ -5,3 +5,4 @@ members = [
     "zmx",
     "zmx_macros",
 ]
+resolver = "2"

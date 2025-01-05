@@ -42,7 +42,7 @@ impl GdiFont {
 impl Drop for GdiFont {
     fn drop(&mut self) {
         if self.0 != HFONT::default() {
-            unsafe { DeleteObject(self.0) };
+            let _ = unsafe { DeleteObject(self.0) };
             self.0 = HFONT::default();
         }
     }
@@ -65,7 +65,7 @@ impl ContextSaverRestorer {
 impl Drop for ContextSaverRestorer {
     fn drop(&mut self) {
         if self.context != HDC::default() {
-            unsafe { RestoreDC(self.context, self.stack_value) };
+            let _ = unsafe { RestoreDC(self.context, self.stack_value) };
             self.context = HDC::default();
         }
     }

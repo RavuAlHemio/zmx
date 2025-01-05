@@ -1,4 +1,6 @@
-use once_cell::sync::Lazy;
+use std::ops::Deref;
+use std::sync::LazyLock;
+
 use windows::core::PCSTR;
 use windows::Win32::Foundation::{HMODULE, HWND, MAX_PATH};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -9,9 +11,21 @@ use crate::show_message_box;
 use crate::string_holder::StringHolder;
 
 
-pub static USER32: Lazy<HMODULE> = Lazy::new(|| {
+#[derive(Clone, Copy, Debug)]
+pub struct LoadedLibrary {
+    handle: HMODULE,
+}
+impl Deref for LoadedLibrary {
+    type Target = HMODULE;
+    fn deref(&self) -> &Self::Target { &self.handle }
+}
+unsafe impl Send for LoadedLibrary {}
+unsafe impl Sync for LoadedLibrary {}
+
+
+pub static USER32: LazyLock<LoadedLibrary> = LazyLock::new(|| {
     match load_system_dll("user32.dll") {
-        Ok(dll) => dll,
+        Ok(handle) => LoadedLibrary { handle },
         Err(e) => {
             let text = format!("failed to load user32.dll: {}", e);
             show_message_box(None, &text, MB_ICONERROR | MB_OK);
@@ -19,8 +33,8 @@ pub static USER32: Lazy<HMODULE> = Lazy::new(|| {
         },
     }
 });
-pub static GET_DPI_FOR_WINDOW: Lazy<Option<unsafe extern "system" fn(HWND) -> u32>> = Lazy::new(|| {
-    get_symbol(*USER32, "GetDpiForWindow")
+pub static GET_DPI_FOR_WINDOW: LazyLock<Option<unsafe extern "system" fn(HWND) -> u32>> = LazyLock::new(|| {
+    get_symbol(**USER32, "GetDpiForWindow")
         .map(|f| unsafe { std::mem::transmute(f) })
 });
 

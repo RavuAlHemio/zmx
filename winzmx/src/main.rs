@@ -6,20 +6,20 @@ mod string_holder;
 
 
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{c_void, OsString};
 use std::fs::File;
 use std::mem::size_of_val;
 use std::os::windows::prelude::OsStringExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::ptr::null_mut;
+use std::sync::OnceLock;
 
 use libzmx::{
     ZipCentralDirectoryEntry, best_effort_decode, zip_get_files, zip_make_executable,
     zip_make_not_executable,
 };
-use once_cell::sync::OnceCell;
-use windows::w;
-use windows::core::{PCWSTR, PWSTR};
+use windows::core::{PCWSTR, PWSTR, w};
 use windows::Win32::Foundation::{FALSE, HMODULE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -61,9 +61,11 @@ struct State {
     pub button: HWND,
     pub needs_new_font: bool,
 }
+unsafe impl Send for State {}
+unsafe impl Sync for State {}
 
 
-static STATE: OnceCell<Mutex<State>> = OnceCell::new();
+static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 
 
 extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -71,25 +73,25 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
         unsafe { PostQuitMessage(0) };
         LRESULT(0)
     } else if msg == WM_CREATE {
-        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        let mut state_guard = STATE.get().unwrap().lock();
         handle_window_create(&mut *state_guard, hwnd);
         LRESULT(0)
     } else if msg == WM_SIZE {
         let width = (((lparam.0 as usize) >> 0) & 0xFFFF) as u16;
         let height = (((lparam.0 as usize) >> 16) & 0xFFFF) as u16;
-        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        let mut state_guard = STATE.get().unwrap().lock();
         handle_window_resized(&mut *state_guard, hwnd, width.into(), height.into());
         LRESULT(0)
     } else if msg == WM_COMMAND {
-        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        let mut state_guard = STATE.get().unwrap().lock();
         let notif_code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-        if lparam.0 == state_guard.list_box.0 {
+        if lparam.0 == state_guard.list_box.0 as isize {
             // it's the list box
             if notif_code == LBN_SELCHANGE {
                 // alright then
                 handle_list_selection_changed(&mut *state_guard);
             }
-        } else if lparam.0 == state_guard.button.0 {
+        } else if lparam.0 == state_guard.button.0 as isize {
             // it's the button
             if notif_code == BN_CLICKED {
                 handle_button_clicked(&mut *state_guard);
@@ -98,11 +100,11 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
         LRESULT(0)
     } else if msg == WM_DPICHANGED {
         {
-            let mut state_guard = STATE.get().unwrap().lock().unwrap();
+            let mut state_guard = STATE.get().unwrap().lock();
             state_guard.needs_new_font = true;
         }
         let rect = unsafe { (lparam.0 as *const RECT).as_ref() }.unwrap();
-        unsafe {
+        let _ = unsafe {
             SetWindowPos(
                 hwnd,
                 HWND_TOP,
@@ -128,7 +130,7 @@ fn handle_window_create(state: &mut State, hwnd: HWND) {
     };
 
     // create the list box
-    let list_box = unsafe {
+    let list_box_res = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("LISTBOX"),
@@ -142,18 +144,21 @@ fn handle_window_create(state: &mut State, hwnd: HWND) {
             None,
         )
     };
-    if list_box == HWND::default() {
-        let error_message = format!("failed to create list box: {}", windows::core::Error::from_win32());
-        show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
-        return;
-    }
+    let list_box = match list_box_res {
+        Ok(lb) => lb,
+        Err(e) => {
+            let error_message = format!("failed to create list box: {}", e);
+            show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
+            return;
+        },
+    };
     state.list_box = list_box;
     populate_list_box_from_entries(state);
     unsafe { SendMessageW(list_box, WM_SETFONT, WPARAM(system_font.0 as usize), LPARAM(FALSE.0 as isize)) };
-    unsafe { ShowWindow(list_box, SW_SHOW) };
+    let _ = unsafe { ShowWindow(list_box, SW_SHOW) };
 
     // create the enable/disable button
-    let button = unsafe {
+    let button_res = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
@@ -167,18 +172,21 @@ fn handle_window_create(state: &mut State, hwnd: HWND) {
             None,
         )
     };
-    if button == HWND::default() {
-        let error_message = format!("failed to create button: {}", windows::core::Error::from_win32());
-        show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
-        return;
-    }
+    let button = match button_res {
+        Ok(b) => b,
+        Err(e) => {
+            let error_message = format!("failed to create button: {}", e);
+            show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
+            return;
+        },
+    };
     state.button = button;
     unsafe { SendMessageW(button, WM_SETFONT, WPARAM(system_font.0 as usize), LPARAM(FALSE.0 as isize)) };
-    unsafe { ShowWindow(button, SW_SHOW) };
+    let _ = unsafe { ShowWindow(button, SW_SHOW) };
 
     let mut window_rect = RECT::default();
     let result = unsafe { GetWindowRect(hwnd, &mut window_rect) };
-    if !result.as_bool() {
+    if let Err(_) = result {
         show_message_box(None, "failed to get window rect", MB_ICONERROR | MB_OK);
         return;
     }
@@ -206,17 +214,17 @@ fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32)
     let (margin_x, margin_y) = scaler.scale_xy(7, 7);
     let (_padding_x, padding_y) = scaler.scale_xy(4, 4);
 
-    let mut new_font = HFONT(0);
+    let mut new_font = HFONT(null_mut());
     if state.needs_new_font {
         new_font = get_system_font(Some(hwnd), scaler.dpi_scaling_factor())
-            .unwrap_or(HFONT(0));
+            .unwrap_or(HFONT(null_mut()));
         state.needs_new_font = false;
     }
 
     // button: width at least 50 DLUs, height 13 DLUs
     // we need more than 50 though
     let (button_min_width, button_height) = scaler.scale_xy(80, 13);
-    unsafe {
+    let _ = unsafe {
         MoveWindow(
             state.button,
             width - (margin_x + button_min_width),
@@ -231,7 +239,7 @@ fn handle_window_resized(state: &mut State, hwnd: HWND, width: i32, height: i32)
     }
 
     // fill the window with the list box
-    unsafe {
+    let _ = unsafe {
         MoveWindow(
             state.list_box,
             margin_x, margin_y,
@@ -253,7 +261,7 @@ fn handle_list_selection_changed(state: &mut State) {
     let sel_count = unsafe { SendMessageW(state.list_box, LB_GETSELCOUNT, WPARAM(0), LPARAM(0)) };
     if sel_count.0 == 0 {
         // disable the button and jump out
-        unsafe { EnableWindow(state.button, FALSE) };
+        let _ = unsafe { EnableWindow(state.button, FALSE) };
         return;
     }
 
@@ -273,13 +281,13 @@ fn handle_list_selection_changed(state: &mut State) {
     }
 
     if all_executable {
-        unsafe { SetWindowTextW(state.button, w!("make non-&executable")) };
-        unsafe { EnableWindow(state.button, TRUE) };
+        let _ = unsafe { SetWindowTextW(state.button, w!("make non-&executable")) };
+        let _ = unsafe { EnableWindow(state.button, TRUE) };
     } else if all_not_executable {
-        unsafe { SetWindowTextW(state.button, w!("make &executable")) };
-        unsafe { EnableWindow(state.button, TRUE) };
+        let _ = unsafe { SetWindowTextW(state.button, w!("make &executable")) };
+        let _ = unsafe { EnableWindow(state.button, TRUE) };
     } else {
-        unsafe { EnableWindow(state.button, FALSE) };
+        let _ = unsafe { EnableWindow(state.button, FALSE) };
     }
 }
 
@@ -435,7 +443,7 @@ fn main() -> ExitCode {
 
     // read ZIP file
     {
-        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        let mut state_guard = STATE.get().unwrap().lock();
         match zip_get_files(&state_guard.zip_file) {
             Ok(mut ze) => {
                 state_guard.entries.append(&mut ze);
@@ -474,10 +482,10 @@ fn main() -> ExitCode {
     window_class.cbSize = size_of_val(&window_class).try_into().unwrap();
     window_class.style = WNDCLASS_STYLES::default();
     window_class.lpfnWndProc = Some(wnd_proc);
-    window_class.hInstance = instance;
+    window_class.hInstance = instance.into();
     window_class.hIcon = icon;
     window_class.hCursor = cursor;
-    window_class.hbrBackground = HBRUSH(isize::try_from(COLOR_WINDOW.0).unwrap() + 1);
+    window_class.hbrBackground = HBRUSH((COLOR_WINDOW.0 + 1) as isize as *mut c_void);
     window_class.lpszClassName = main_window_class.as_pcwstr();
 
     let window_class_atom = unsafe { RegisterClassExW(&window_class) };
@@ -488,7 +496,7 @@ fn main() -> ExitCode {
     }
 
     // create the window
-    let window = unsafe {
+    let window_res = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             main_window_class.as_pcwstr(),
@@ -504,20 +512,23 @@ fn main() -> ExitCode {
             None,
         )
     };
-    if window == HWND::default() {
-        let error_message = format!("failed to create window: {}", windows::core::Error::from_win32());
-        show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
-        return ExitCode::FAILURE;
-    }
+    let window = match window_res {
+        Ok(w) => w,
+        Err(e) => {
+            let error_message = format!("failed to create window: {}", e);
+            show_message_box(None, &error_message, MB_ICONERROR | MB_OK);
+            return ExitCode::FAILURE;
+        },
+    };
 
     // store this as the main window
     {
-        let mut state_guard = STATE.get().unwrap().lock().unwrap();
+        let mut state_guard = STATE.get().unwrap().lock();
         state_guard.main_window = window;
     }
 
     // show the window
-    unsafe {
+    let _ = unsafe {
         ShowWindow(window, SW_SHOWDEFAULT)
     };
 
@@ -549,7 +560,7 @@ fn main() -> ExitCode {
         }
 
         // regular message
-        unsafe { TranslateMessage(&msg) };
+        let _ = unsafe { TranslateMessage(&msg) };
         unsafe { DispatchMessageW(&msg) };
     }
 
