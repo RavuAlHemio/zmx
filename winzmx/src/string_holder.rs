@@ -19,6 +19,7 @@ impl StringHolder {
 
     /// Creates a new StringHolder by copying u16s from the given pointer until a NUL u16 is
     /// encountered or, if a maximum length is given, until this number of u16s is copied.
+    #[allow(unused)]
     pub fn from_ptr_nul_terminated(mut ptr: *const u16, max_length: Option<usize>) -> Self {
         let mut words = Vec::new();
         loop {
@@ -45,6 +46,7 @@ impl StringHolder {
     }
 
     /// Creates a new StringHolder by copying the given number of u16s from the given pointer.
+    #[allow(unused)]
     pub fn from_ptr_with_length(ptr: *const u16, length: usize) -> Self {
         let slice = unsafe { std::slice::from_raw_parts(ptr, length) };
         let words = Vec::from(slice);
@@ -88,6 +90,7 @@ impl StringHolder {
     /// The length of the string in this StringHolder, in units of bytes.
     ///
     /// Depending on the argument, counts the terminating NUL character or not.
+    #[allow(unused)]
     #[inline]
     pub fn len_bytes(&self, count_nul: bool) -> usize {
         self.len_u16s(count_nul) * size_of::<u16>()
@@ -108,6 +111,7 @@ impl StringHolder {
     /// Attempt to decode the held string as UTF-16.
     ///
     /// Returns `None` if the held string is not valid UTF-16.
+    #[allow(unused)]
     pub fn try_to_string(&self) -> Option<String> {
         String::from_utf16(self.as_slice(false)).ok()
     }
@@ -133,6 +137,7 @@ impl StringHolder {
     }
 
     /// Whether the string in this StringHolder starts with the given text.
+    #[allow(unused)]
     pub fn starts_with(&self, needle: &str) -> bool {
         let needle_u16: Vec<u16> = needle.encode_utf16().collect();
         let me_slice = self.as_slice(false);

@@ -50,6 +50,7 @@ impl EndOfCentralDirectory {
     }
 
     /// Write the end-of-central-directory record.
+    #[allow(unused)]
     pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
         // write signature
         writer.write_u32_le(Self::signature())?;
@@ -148,11 +149,13 @@ impl Zip64EndOfCentralDirectoryLocator {
     /// It is equivalent to `b"PK\x06\x07"`, interpreted as `u32` in little-endian byte order.
     pub const fn signature() -> u32 { 0x07064B50 }
 
+    #[allow(unused)]
     const fn min_len_bias() -> u64 {
         4 // signature
     }
 
     /// Write the Zip64 end-of-central-directory locator record.
+    #[allow(unused)]
     pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
         // write signature
         writer.write_u32_le(Self::signature())?;
@@ -228,6 +231,7 @@ impl Zip64EndOfCentralDirectory {
     }
 
     /// Write the Zip64 end-of-central-directory record.
+    #[allow(unused)]
     pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
         // length is that of the whole structure including the extensible data sector
         // but excluding the signature (4 bytes) and the length field (8 bytes)
@@ -474,6 +478,7 @@ impl Zip64ExtraField {
     pub const fn tag() -> u16 { 0x0001 }
 
     /// Write the extra field, including tag and length.
+    #[allow(unused)]
     pub fn write<W: Write>(&self, mut writer: W) -> Result<(), crate::Error> {
         // write tag
         writer.write_u16_le(Self::tag())?;
@@ -511,6 +516,7 @@ impl Zip64ExtraField {
     ///
     /// The relevant values from the central directory entry must be passed, as the extra field only
     /// contains those values that are out-of-range (and, therefore, have their max value).
+    #[allow(unused)]
     pub fn read_after_tag<R: Read>(
         mut reader: R,
         cdir_uncompressed_size: u32,

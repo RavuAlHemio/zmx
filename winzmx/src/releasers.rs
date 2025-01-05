@@ -14,6 +14,7 @@ impl DeviceContext {
         }
     }
 
+    #[allow(unused)]
     pub fn into_raw(mut self) -> (HWND, HDC) {
         let ret = (self.window, self.context);
         self.window = HWND::default();
@@ -33,6 +34,7 @@ impl Drop for DeviceContext {
 
 pub struct GdiFont(pub HFONT);
 impl GdiFont {
+    #[allow(unused)]
     pub fn into_raw(self) -> HFONT {
         self.0
     }

@@ -160,6 +160,7 @@ impl Scaler {
         (self.scale_x(x_dlu), self.scale_y(y_dlu))
     }
 
+    #[allow(unused)]
     #[inline]
     pub fn scale_font_size(&self, size: i32) -> i32 {
         ((size as f64) * self.dpi_scaling_factor) as i32

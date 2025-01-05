@@ -6,6 +6,7 @@ use std::io;
 
 macro_rules! implement_read {
     ($be_name:ident, $le_name:ident, $int_ty:ident, $byte_count:literal) => {
+        #[allow(unused)]
         #[inline]
         fn $be_name(&mut self) -> Result<$int_ty, ::std::io::Error> {
             let mut bytes = [0u8; $byte_count];
@@ -13,6 +14,7 @@ macro_rules! implement_read {
             Ok($int_ty::from_be_bytes(bytes))
         }
 
+        #[allow(unused)]
         #[inline]
         fn $le_name(&mut self) -> Result<$int_ty, ::std::io::Error> {
             let mut bytes = [0u8; $byte_count];
@@ -24,6 +26,7 @@ macro_rules! implement_read {
 macro_rules! implement_read_signed {
     ($signed_ty:ident, $signed_name:ident, $unsigned_name:ident, $comment:expr) => {
         #[doc = $comment]
+        #[allow(unused)]
         #[inline]
         #[must_use]
         fn $signed_name(&mut self) -> Result<$signed_ty, ::std::io::Error> {
@@ -34,12 +37,14 @@ macro_rules! implement_read_signed {
 
 macro_rules! implement_write {
     ($be_name:ident, $le_name:ident, $int_ty:ident, $byte_count:literal) => {
+        #[allow(unused)]
         #[inline]
         fn $be_name(&mut self, val: $int_ty) -> Result<(), ::std::io::Error> {
             let bytes: [u8; $byte_count] = val.to_be_bytes();
             self.write_all(&bytes)
         }
 
+        #[allow(unused)]
         #[inline]
         fn $le_name(&mut self, val: $int_ty) -> Result<(), ::std::io::Error> {
             let bytes: [u8; $byte_count] = val.to_le_bytes();
@@ -50,6 +55,7 @@ macro_rules! implement_write {
 macro_rules! implement_write_signed {
     ($signed_ty:ident, $signed_name:ident, $unsigned_ty:ident, $unsigned_name:ident, $comment:expr) => {
         #[doc = $comment]
+        #[allow(unused)]
         #[inline]
         #[must_use]
         fn $signed_name(&mut self, value: $signed_ty) -> Result<(), ::std::io::Error> {
