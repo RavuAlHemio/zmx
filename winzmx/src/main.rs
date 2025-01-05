@@ -1,5 +1,6 @@
 mod dynamic_linking;
 mod graphics;
+mod mutex;
 mod releasers;
 mod string_holder;
 
@@ -11,7 +12,6 @@ use std::mem::size_of_val;
 use std::os::windows::prelude::OsStringExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Mutex;
 
 use libzmx::{
     ZipCentralDirectoryEntry, best_effort_decode, zip_get_files, zip_make_executable,
@@ -41,6 +41,7 @@ use windows::Win32::UI::Controls::Dialogs::{
 };
 
 use crate::graphics::{get_system_font, RectExt, Scaler};
+use crate::mutex::Mutex;
 use crate::string_holder::StringHolder;
 
 
